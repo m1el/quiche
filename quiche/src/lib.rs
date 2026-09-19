@@ -8732,7 +8732,25 @@ impl<F: BufFactory> Connection<F> {
                     self.data_blocked_recv_count.saturating_add(1);
             },
 
-            frame::Frame::StreamDataBlocked { .. } => {
+            frame::Frame::StreamDataBlocked { stream_id, .. } => {
+                // Peer can't send on our unidirectional streams, so it can't
+                // be blocked on them either.
+                if !stream::is_bidi(stream_id) &&
+                    stream::is_local(stream_id, self.is_server)
+                {
+                    return Err(Error::InvalidStreamState(stream_id));
+                }
+
+                // Get existing stream or create a new one, which enforces the
+                // stream limit like any other stream-related frame does. If
+                // the stream has already been closed and collected, ignore
+                // the frame.
+                match self.get_or_create_stream(stream_id, false) {
+                    Ok(_) | Err(Error::Done) => (),
+
+                    Err(e) => return Err(e),
+                };
+
                 self.stream_data_blocked_recv_count =
                     self.stream_data_blocked_recv_count.saturating_add(1);
             },

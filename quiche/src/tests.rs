@@ -1473,6 +1473,65 @@ fn max_stream_data_receive_uni(
 }
 
 #[rstest]
+/// Tests that receiving a STREAM_DATA_BLOCKED frame for a send-only
+/// unidirectional stream is forbidden.
+fn stream_data_blocked_send_uni(
+    #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+) {
+    let mut buf = [0; 65535];
+
+    let mut pipe = test_utils::Pipe::new(cc_algorithm_name).unwrap();
+    assert_eq!(pipe.handshake(), Ok(()));
+
+    // Server opens unidirectional stream.
+    assert_eq!(pipe.server.stream_send(3, b"hello", false), Ok(5));
+    assert_eq!(pipe.advance(), Ok(()));
+
+    // Client sends STREAM_DATA_BLOCKED on the server's unidirectional stream.
+    let frames = [frame::Frame::StreamDataBlocked {
+        stream_id: 3,
+        limit: 1024,
+    }];
+
+    let pkt_type = Type::Short;
+    assert_eq!(
+        pipe.send_pkt_to_server(pkt_type, &frames, &mut buf),
+        Err(Error::InvalidStreamState(3)),
+    );
+}
+
+#[rstest]
+/// Tests that a STREAM_DATA_BLOCKED frame is subject to the stream limit.
+fn stream_data_blocked_stream_limit(
+    #[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
+) {
+    let mut buf = [0; 65535];
+
+    let mut pipe = test_utils::Pipe::new(cc_algorithm_name).unwrap();
+    assert_eq!(pipe.handshake(), Ok(()));
+
+    // Within the limit the frame is simply counted.
+    let frames = [frame::Frame::StreamDataBlocked {
+        stream_id: 0,
+        limit: 1024,
+    }];
+
+    let pkt_type = Type::Short;
+    assert!(pipe.send_pkt_to_server(pkt_type, &frames, &mut buf).is_ok());
+    assert_eq!(pipe.server.stats().stream_data_blocked_recv_count, 1);
+
+    let frames = [frame::Frame::StreamDataBlocked {
+        stream_id: 4000,
+        limit: 1024,
+    }];
+
+    assert_eq!(
+        pipe.send_pkt_to_server(pkt_type, &frames, &mut buf),
+        Err(Error::StreamLimit),
+    );
+}
+
+#[rstest]
 fn empty_payload(#[values("cubic", "bbr2_gcongestion")] cc_algorithm_name: &str) {
     let mut buf = [0; 65535];
 
